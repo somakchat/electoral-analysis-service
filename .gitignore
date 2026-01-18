@@ -3,3 +3,9 @@
 index/*.index
 index/faiss.index
 
+
+# Never commit env files
+backend/.env
+.env
+*.env
+
