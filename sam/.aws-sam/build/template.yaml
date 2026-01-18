@@ -1,0 +1,478 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Political Strategy Maker - Advanced Multi-Agent RAG System Serverless
+  deployment with WebSocket API for real-time agent streaming
+
+  '
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues:
+    - dev
+    - staging
+    - prod
+  LLMProvider:
+    Type: String
+    Default: openai
+    AllowedValues:
+    - openai
+    - gemini
+  OpenAIModel:
+    Type: String
+    Default: gpt-4o
+    Description: OpenAI chat model name (e.g., gpt-4o). Set to gpt-5.2 only if your
+      OpenAI account has access.
+  OpenAIApiKeySecret:
+    Type: String
+    Default: political-strategy/openai-api-key
+    Description: Secrets Manager secret name for OpenAI API key
+  OpenSearchEndpoint:
+    Type: String
+    Default: ''
+    Description: OpenSearch Serverless endpoint URL (e.g., https://xxx.us-east-1.aoss.amazonaws.com)
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 60
+    MemorySize: 2048
+    Architectures:
+    - x86_64
+    Environment:
+      Variables:
+        APP_ENV: aws
+        LOG_LEVEL: INFO
+        LLM_PROVIDER:
+          Ref: LLMProvider
+        OPENAI_MODEL:
+          Ref: OpenAIModel
+        OPENAI_EMBED_MODEL: text-embedding-3-large
+        S3_BUCKET:
+          Ref: DocumentsBucket
+        S3_KG_BUCKET:
+          Ref: KnowledgeGraphBucket
+        DDB_TABLE_SESSIONS:
+          Ref: SessionsTable
+        DDB_TABLE_MEMORY:
+          Ref: MemoryTable
+        DDB_TABLE_ENTITIES:
+          Ref: EntitiesTable
+        OPENSEARCH_ENDPOINT:
+          Ref: OpenSearchEndpoint
+        OPENSEARCH_INDEX: political-strategy-maker-v2
+        DEPLOYMENT_REGION:
+          Ref: AWS::Region
+Resources:
+  DocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: political-strategy-docs-${AWS::AccountId}-${AWS::Region}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  SessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: political-strategy-sessions-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: session_id
+        AttributeType: S
+      KeySchema:
+      - AttributeName: session_id
+        KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+  MemoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: political-strategy-memory-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: pk
+        AttributeType: S
+      - AttributeName: sk
+        AttributeType: S
+      KeySchema:
+      - AttributeName: pk
+        KeyType: HASH
+      - AttributeName: sk
+        KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+  EntitiesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: political-strategy-entities-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: entity_type
+        AttributeType: S
+      - AttributeName: entity_name
+        AttributeType: S
+      KeySchema:
+      - AttributeName: entity_type
+        KeyType: HASH
+      - AttributeName: entity_name
+        KeyType: RANGE
+      GlobalSecondaryIndexes:
+      - IndexName: by-name
+        KeySchema:
+        - AttributeName: entity_name
+          KeyType: HASH
+        Projection:
+          ProjectionType: ALL
+  KnowledgeGraphBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: political-strategy-kg-${AWS::AccountId}-${AWS::Region}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name:
+        Fn::Sub: political-strategy-api-${Environment}
+      StageName:
+        Ref: Environment
+      Cors:
+        AllowMethods: '''GET,POST,PUT,DELETE,OPTIONS'''
+        AllowHeaders: '''Content-Type,Authorization,X-Api-Key'''
+        AllowOrigin: '''*'''
+      Auth:
+        DefaultAuthorizer: NONE
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: political-strategy-ingest-${Environment}
+      CodeUri: IngestFunction
+      Handler: app.aws.ingest_handler.handler
+      Timeout: 120
+      MemorySize: 3008
+      Events:
+        Ingest:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: RestApi
+            Path: /ingest
+            Method: post
+      Policies:
+      - S3CrudPolicy:
+          BucketName:
+            Ref: DocumentsBucket
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: MemoryTable
+      - Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - secretsmanager:GetSecretValue
+          Resource:
+            Fn::Sub: arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${OpenAIApiKeySecret}*
+    Metadata:
+      SamResourceId: IngestFunction
+  MemoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: political-strategy-memory-${Environment}
+      CodeUri: MemoryFunction
+      Handler: app.aws.memory_handler.handler
+      Events:
+        GetMemory:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: RestApi
+            Path: /memory/{session_id}
+            Method: get
+        GetEntities:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: RestApi
+            Path: /entities/{entity_type}
+            Method: get
+        SearchEntities:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: RestApi
+            Path: /entities/search/{query}
+            Method: get
+      Policies:
+      - DynamoDBReadPolicy:
+          TableName:
+            Ref: SessionsTable
+      - DynamoDBReadPolicy:
+          TableName:
+            Ref: MemoryTable
+    Metadata:
+      SamResourceId: MemoryFunction
+  FeedbackStatsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: political-strategy-feedback-stats-${Environment}
+      CodeUri: FeedbackStatsFunction
+      Handler: app.aws.feedback_stats.handler
+      Timeout: 10
+      Events:
+        FeedbackStatsGet:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: RestApi
+            Path: /feedback/stats
+            Method: get
+        FeedbackStatsOptions:
+          Type: Api
+          Properties:
+            RestApiId:
+              Ref: RestApi
+            Path: /feedback/stats
+            Method: options
+    Metadata:
+      SamResourceId: FeedbackStatsFunction
+  WebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name:
+        Fn::Sub: political-strategy-ws-${Environment}
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: $request.body.action
+  WebSocketStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      StageName:
+        Ref: Environment
+      AutoDeploy: true
+      DefaultRouteSettings:
+        DataTraceEnabled: true
+        DetailedMetricsEnabled: true
+        LoggingLevel: INFO
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      RouteKey: $connect
+      AuthorizationType: NONE
+      Target:
+        Fn::Sub: integrations/${ConnectIntegration}
+  ConnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: political-strategy-ws-connect-${Environment}
+      CodeUri: ConnectFunction
+      Handler: app.aws.ws_connect.handler
+      Timeout: 10
+    Metadata:
+      SamResourceId: ConnectFunction
+  ConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectFunction.Arn}/invocations
+  ConnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Ref: ConnectFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/$connect
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      Target:
+        Fn::Sub: integrations/${DisconnectIntegration}
+  DisconnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: political-strategy-ws-disconnect-${Environment}
+      CodeUri: DisconnectFunction
+      Handler: app.aws.ws_disconnect.handler
+      Timeout: 10
+    Metadata:
+      SamResourceId: DisconnectFunction
+  DisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DisconnectFunction.Arn}/invocations
+  DisconnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Ref: DisconnectFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/$disconnect
+  ChatRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      RouteKey: chat
+      AuthorizationType: NONE
+      Target:
+        Fn::Sub: integrations/${ChatIntegration}
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      RouteKey: $default
+      AuthorizationType: NONE
+      Target:
+        Fn::Sub: integrations/${ChatIntegration}
+  ChatFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName:
+        Fn::Sub: political-strategy-ws-chat-${Environment}
+      CodeUri: ChatFunction
+      Handler: app.aws.ws_chat.handler
+      Timeout: 300
+      MemorySize: 3008
+      Policies:
+      - S3ReadPolicy:
+          BucketName:
+            Ref: DocumentsBucket
+      - S3CrudPolicy:
+          BucketName:
+            Ref: KnowledgeGraphBucket
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: SessionsTable
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: MemoryTable
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: EntitiesTable
+      - Statement:
+          Effect: Allow
+          Action:
+          - execute-api:ManageConnections
+          Resource:
+            Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*
+      - Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - secretsmanager:GetSecretValue
+          Resource:
+            Fn::Sub: arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${OpenAIApiKeySecret}*
+      - Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - aoss:APIAccessAll
+          Resource:
+            Fn::Sub: arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+    Metadata:
+      SamResourceId: ChatFunction
+  ChatIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId:
+        Ref: WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ChatFunction.Arn}/invocations
+  ChatPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Ref: ChatFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/chat
+  ChatDefaultPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Ref: ChatFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn:
+        Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/$default
+Outputs:
+  RestApiUrl:
+    Description: REST API URL
+    Value:
+      Fn::Sub: https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-RestApiUrl
+  WebSocketUrl:
+    Description: WebSocket API URL
+    Value:
+      Fn::Sub: wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-WebSocketUrl
+  DocumentsBucketName:
+    Description: S3 Bucket for documents
+    Value:
+      Ref: DocumentsBucket
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-DocumentsBucket
+  KnowledgeGraphBucketName:
+    Description: S3 Bucket for knowledge graph
+    Value:
+      Ref: KnowledgeGraphBucket
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-KnowledgeGraphBucket
+  SessionsTableName:
+    Description: DynamoDB Sessions Table
+    Value:
+      Ref: SessionsTable
+  MemoryTableName:
+    Description: DynamoDB Memory Table
+    Value:
+      Ref: MemoryTable
+  EntitiesTableName:
+    Description: DynamoDB Entities Table
+    Value:
+      Ref: EntitiesTable

@@ -1,0 +1,9 @@
+﻿{
+    "body":  "{\"query\":\"What reform needed for BJP for next elec\",\"session_id\":\"debug-model-test\",\"action\":\"chat\"}",
+    "requestContext":  {
+                           "routeKey":  "chat",
+                           "connectionId":  "test-123",
+                           "stage":  "prod",
+                           "domainName":  "yq1l37m37g.execute-api.us-east-1.amazonaws.com"
+                       }
+}

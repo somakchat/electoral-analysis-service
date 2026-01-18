@@ -1,0 +1,9 @@
+{
+  "requestContext": {
+    "connectionId": "test123",
+    "routeKey": "chat",
+    "domainName": "yq1l37m37g.execute-api.us-east-1.amazonaws.com",
+    "stage": "prod"
+  },
+  "body": "{\"action\":\"chat\",\"session_id\":\"test\",\"query\":\"What reform is needed for BJP?\"}"
+}

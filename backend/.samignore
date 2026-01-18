@@ -1,0 +1,79 @@
+# SAM Ignore File - Exclude local-only files from Lambda packaging
+
+# ============= Virtual environment (HUGE!) =============
+venv/
+.venv/
+env/
+
+# ============= Data & Index directories (use S3/OpenSearch) =============
+data/
+index/
+*.pkl
+*.faiss
+*.index
+
+# ============= Local-only code =============
+# Don't exclude these - they might be needed
+# app/services/rag/local_store.py
+
+# ============= IDE and Editor =============
+.idea/
+.vscode/
+*.swp
+*.swo
+__pycache__/
+*.pyc
+*.pyo
+.mypy_cache/
+
+# ============= Git =============
+.git/
+.gitignore
+.gitattributes
+
+# ============= Logs =============
+*.log
+logs/
+
+# ============= Test files =============
+tests/
+test_*.py
+*_test.py
+pytest.ini
+.pytest_cache/
+conftest.py
+
+# ============= Documentation =============
+docs/
+*.md
+*.rst
+LICENSE
+
+# ============= Development files =============
+requirements-full.txt
+requirements-lambda.txt
+env.template
+run_local.ps1
+Makefile
+
+# ============= OS files =============
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ============= Coverage =============
+.coverage
+htmlcov/
+coverage.xml
+
+# ============= Build artifacts =============
+*.whl
+*.tar.gz
+*.egg-info/
+dist/
+build/
+
+# ============= Environment files (secrets!) =============
+.env
+.env.local
+.env.production

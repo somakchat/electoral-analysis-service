@@ -1,0 +1,1 @@
+﻿{"requestContext":{"connectionId":"test-123","domainName":"yq1l37m37g.execute-api.us-east-1.amazonaws.com","stage":"prod"},"body":"{\"action\":\"chat\",\"query\":\"test query\",\"session_id\":\"test-session\"}"}
